@@ -1,20 +1,23 @@
 package com.ninfinity.gmsdoze
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Typeface
 import android.os.Bundle
-import android.view.Gravity
-import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import rikka.shizuku.Shizuku
 
 class MainActivity : Activity() {
 
     private lateinit var shizukuText: TextView
-    private lateinit var listText: TextView
+    private lateinit var statusText: TextView
+    private lateinit var logText: TextView
     private lateinit var button: Button
 
     private val binderListener = Shizuku.OnBinderReceivedListener { runOnUiThread { refresh() } }
@@ -25,6 +28,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
+        AppLog.listener = { runOnUiThread { logText.text = AppLog.text() } }
         Shizuku.addBinderReceivedListenerSticky(binderListener)
         Shizuku.addBinderDeadListener(deadListener)
         Shizuku.addRequestPermissionResultListener(permListener)
@@ -36,6 +40,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        AppLog.listener = null
         Shizuku.removeBinderReceivedListener(binderListener)
         Shizuku.removeBinderDeadListener(deadListener)
         Shizuku.removeRequestPermissionResultListener(permListener)
@@ -45,10 +50,7 @@ class MainActivity : Activity() {
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun buildUi() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(20), dp(20), dp(20))
-        }
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val title = TextView(this).apply {
             text = "GMS Keeper"
             textSize = 24f
@@ -56,21 +58,39 @@ class MainActivity : Activity() {
         }
         shizukuText = TextView(this).apply {
             textSize = 16f
-            setPadding(0, dp(16), 0, dp(8))
+            setPadding(0, dp(12), 0, dp(4))
+        }
+        statusText = TextView(this).apply {
+            textSize = 16f
+            setPadding(0, dp(4), 0, dp(8))
         }
         button = Button(this).apply {
             text = "Áp dụng"
             setOnClickListener { onButton() }
         }
-        listText = TextView(this).apply {
-            textSize = 14f
+        val copy = Button(this).apply {
+            text = "Sao chép log"
+            setOnClickListener {
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("log", AppLog.text()))
+                Toast.makeText(this@MainActivity, "Đã sao chép log", Toast.LENGTH_SHORT).show()
+            }
+        }
+        logText = TextView(this).apply {
+            textSize = 12f
             typeface = Typeface.MONOSPACE
-            setPadding(0, dp(16), 0, 0)
+            setTextIsSelectable(true)
+            text = AppLog.text()
         }
         root.addView(title)
         root.addView(shizukuText)
+        root.addView(statusText)
         root.addView(button)
-        root.addView(ScrollView(this).apply { addView(listText) })
+        root.addView(copy)
+        root.addView(ScrollView(this).apply {
+            setPadding(0, dp(12), 0, 0)
+            addView(logText)
+        }, LinearLayout.LayoutParams(-1, 0, 1f))
 
         // targetSdk 35 => edge-to-edge, phải tự chừa status/nav bar
         root.setOnApplyWindowInsetsListener { v, insets ->
@@ -84,18 +104,21 @@ class MainActivity : Activity() {
     private fun onButton() {
         when {
             !Doze.shizukuReady() -> {
-                shizukuText.text = "Shizuku chưa chạy. Mở app Shizuku và khởi động nó trước."
+                AppLog.add("Shizuku chưa chạy. Mở app Shizuku và khởi động nó.")
             }
             !Doze.hasPermission() -> {
                 if (Shizuku.shouldShowRequestPermissionRationale()) {
-                    shizukuText.text = "Quyền bị từ chối. Vào app Shizuku → cấp quyền cho app này."
+                    AppLog.add("Quyền bị từ chối. Vào app Shizuku → cấp quyền cho GMS Keeper.")
                 } else {
                     Shizuku.requestPermission(1001)
                 }
             }
             else -> {
                 button.isEnabled = false
-                Doze.apply(this) { r -> runOnUiThread { showResult(r); button.isEnabled = true } }
+                statusText.text = "Đang chạy..."
+                Doze.apply(this) { r ->
+                    runOnUiThread { showResult(r); button.isEnabled = true }
+                }
             }
         }
     }
@@ -104,16 +127,16 @@ class MainActivity : Activity() {
         when {
             !Doze.shizukuReady() -> {
                 shizukuText.text = "Shizuku: chưa chạy"
+                statusText.text = ""
                 button.text = "Áp dụng"
-                listText.text = ""
             }
             !Doze.hasPermission() -> {
                 shizukuText.text = "Shizuku: đang chạy, chưa cấp quyền"
+                statusText.text = ""
                 button.text = "Cấp quyền Shizuku"
-                listText.text = ""
             }
             else -> {
-                shizukuText.text = "Shizuku: sẵn sàng"
+                shizukuText.text = "Shizuku: sẵn sàng (${Doze.info()})"
                 button.text = "Áp dụng"
                 Doze.readStatus(this) { r -> runOnUiThread { showResult(r) } }
             }
@@ -122,14 +145,11 @@ class MainActivity : Activity() {
 
     private fun showResult(r: Result<String>) {
         r.onSuccess { out ->
-            val lines = Doze.PACKAGES.joinToString("\n") { pkg ->
+            statusText.text = Doze.PACKAGES.joinToString("\n") { pkg ->
                 (if (Doze.isWhitelisted(out, pkg)) "✅ " else "❌ ") + pkg
             }
-            listText.text = lines + "\n\n" + out.lineSequence()
-                .filter { it.contains("google") || it.startsWith("user") }
-                .joinToString("\n")
         }.onFailure {
-            listText.text = "Lỗi: ${it.message}"
+            statusText.text = "❌ Lỗi: ${it.message}"
         }
     }
 }
