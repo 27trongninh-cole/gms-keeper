@@ -1,32 +1,29 @@
-name: Build aoTuV WASM
+name: Build APK
 
-# Chạy mỗi khi bạn push code lên nhánh main, và cho phép bấm chạy tay
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch: {}
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -t aotuv-builder .
-
-      - name: Run build (tạo aotuv.wasm + aotuv.js)
-        run: |
-          mkdir -p output
-          docker run --rm -v "${{ github.workspace }}/output:/build/output" aotuv-builder
-
-      - name: List output (kiểm tra file có ra không)
-        run: ls -la output
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/setup-java@v4
         with:
-          name: aotuv-wasm
-          path: output/
-          if-no-files-found: error
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gms-doze-whitelist-apk
+          path: app/build/outputs/apk/debug/*.apk
