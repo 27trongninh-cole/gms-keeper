@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import rikka.shizuku.Shizuku
+import java.lang.reflect.InvocationTargetException
 import java.util.concurrent.atomic.AtomicBoolean
 
 object Doze {
@@ -27,8 +28,41 @@ object Doze {
             "(2000=adb/shell, 0=root), perm=${hasPermission()}"
     }.getOrElse { "Shizuku info lỗi: ${it.message}" }
 
-    /** Chạy 1 lệnh shell qua Shizuku UserService. Luôn gọi onResult đúng 1 lần (kể cả timeout). */
+    /** Cách 1: Shizuku.newProcess (private trong API 13 nên gọi bằng reflection), chạy ngay trong server Shizuku. */
+    private fun execViaNewProcess(command: String): String {
+        try {
+            val m = Shizuku::class.java.getDeclaredMethod(
+                "newProcess",
+                Array<String>::class.java,
+                Array<String>::class.java,
+                String::class.java
+            )
+            m.isAccessible = true
+            val p = m.invoke(null, arrayOf("sh", "-c", command), null, null) as Process
+            val out = p.inputStream.bufferedReader().readText()
+            p.waitFor()
+            return out
+        } catch (e: InvocationTargetException) {
+            throw e.targetException ?: e
+        }
+    }
+
+    /** Chạy 1 lệnh shell: thử newProcess trước, lỗi thì fallback sang UserService. Gọi onResult đúng 1 lần. */
     fun run(ctx: Context, command: String, onResult: (Result<String>) -> Unit) {
+        Thread {
+            val r = runCatching { execViaNewProcess(command) }
+            if (r.isSuccess) {
+                AppLog.add("newProcess OK. Kết quả:\n${r.getOrNull()}")
+                onResult(r)
+            } else {
+                AppLog.add("newProcess lỗi: ${r.exceptionOrNull()}. Thử UserService...")
+                runViaUserService(ctx, command, onResult)
+            }
+        }.start()
+    }
+
+    /** Cách 2 (fallback): Shizuku UserService. Luôn gọi onResult đúng 1 lần (kể cả timeout). */
+    private fun runViaUserService(ctx: Context, command: String, onResult: (Result<String>) -> Unit) {
         val app = ctx.applicationContext
         val done = AtomicBoolean(false)
         val handler = Handler(Looper.getMainLooper())
@@ -101,10 +135,12 @@ object Doze {
     fun isWhitelisted(output: String, pkg: String): Boolean =
         output.lineSequence().any { it.contains(",$pkg,") }
 
+    private val autoBusy = AtomicBoolean(false)
+
     fun applyIfPossible(ctx: Context) {
-        if (hasPermission()) {
+        if (hasPermission() && autoBusy.compareAndSet(false, true)) {
             AppLog.add("Tự động áp dụng (binder/boot)")
-            apply(ctx) {}
+            apply(ctx) { autoBusy.set(false) }
         }
     }
 }
