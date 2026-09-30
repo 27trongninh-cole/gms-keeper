@@ -499,10 +499,7 @@ class MainActivity : Activity() {
                 else
                     "Hệ thống đã cho phép. Nếu vẫn trễ thì nguyên nhân nằm ngoài Doze (trình quản lý pin của Xiaomi hoặc tự app quản lý)."
         }
-        return lines.joinToString("
-") + "
-
-" + advice
+        return lines.joinToString("\n") + "\n\n" + advice
     }
 
     private fun showDetail(pkg: String, name: String) {

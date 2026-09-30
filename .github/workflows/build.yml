@@ -1,9 +1,12 @@
-name: Build APK
+name: Build & Release APK
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write   # cần để tạo GitHub Release
 
 jobs:
   build:
@@ -20,10 +23,31 @@ jobs:
         with:
           gradle-version: 8.10.2
 
-      - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+      - name: Build release APK
+        run: gradle assembleRelease --no-daemon
+
+      - name: Đặt tên APK theo version
+        id: apk
+        run: |
+          VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          SRC=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
+          DEST="gms-keeper-v${VERSION}.apk"
+          cp "$SRC" "$DEST"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "file=$DEST" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: gms-doze-whitelist-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: gms-keeper-apk
+          path: ${{ steps.apk.outputs.file }}
+
+      - name: Tạo / cập nhật GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.apk.outputs.version }}
+          name: GMS Keeper v${{ steps.apk.outputs.version }}
+          body: |
+            Bản build tự động từ commit ${{ github.sha }}.
+            Tải file `${{ steps.apk.outputs.file }}` bên dưới rồi cài lên máy.
+          files: ${{ steps.apk.outputs.file }}
+          make_latest: true

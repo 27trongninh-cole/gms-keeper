@@ -6,9 +6,12 @@ Ngoài whitelist Doze, app còn đặt appops `RUN_IN_BACKGROUND` / `RUN_ANY_IN_
 
 ## Build không cần Android Studio
 1. Tạo repo GitHub mới, push toàn bộ thư mục này lên nhánh `main`.
-2. Tab **Actions** → workflow **Build APK** tự chạy (hoặc bấm *Run workflow*).
-3. Xong thì vào run đó → **Artifacts** → tải `gms-doze-whitelist-apk` → giải nén ra `gms-keeper-debug.apk`.
-4. Cài APK lên máy.
+2. Tab **Actions** → workflow **Build & Release APK** tự chạy (hoặc bấm *Run workflow*).
+3. Xong thì vào tab **Releases** (cột phải trang repo) → tải `gms-keeper-vX.Y.apk` ở bản mới nhất → cài lên máy.
+   Cũng có thể lấy từ **Artifacts** trong run đó.
+
+Mỗi lần push, release `v<versionName>` được tạo hoặc cập nhật tự động.
+Muốn ra release mới thì tăng `versionCode` và `versionName` trong `app/build.gradle.kts`.
 
 ## Dùng
 1. Cài Shizuku (Google Play), bật Wireless debugging, khởi động Shizuku.
