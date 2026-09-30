@@ -3,6 +3,15 @@
 
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <package android:name="com.google.android.gms" />
+        <package android:name="com.google.android.gsf" />
+    </queries>
+
     <application
         android:name=".App"
         android:allowBackup="false"

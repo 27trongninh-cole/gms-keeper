@@ -15,6 +15,10 @@ Ngoài whitelist Doze, app còn đặt appops `RUN_IN_BACKGROUND` / `RUN_ANY_IN_
 2. Mở app → **Cấp quyền Shizuku** → **Áp dụng**.
 3. Sau reboot: khởi động lại Shizuku, app tự áp dụng lại whitelist khi Shizuku lên.
 
+## Ứng dụng bảo vệ thêm
+Ngoài GMS/GSF, app áp dụng cùng bộ lệnh cho các app bạn chọn (mặc định có Zalo, `com.zing.zalo`).
+Chạm vào một app để xem chẩn đoán: tiến trình, standby bucket, whitelist, appops, force-stop. Giữ để bỏ khỏi danh sách.
+
 ## Lưu ý HyperOS
 - Bật **Tự khởi động (Autostart)** cho app này.
 - Tiết kiệm pin của app này: **Không hạn chế**.

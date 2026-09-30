@@ -1,9 +1,11 @@
 package com.ninfinity.gmsdoze
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
@@ -38,12 +40,16 @@ class MainActivity : Activity() {
     private var cText = 0
     private var cSub = 0
 
+    private enum class St { OK, PARTIAL, STOPPED, MISSING }
+
     private lateinit var scroll: ScrollView
     private lateinit var header: LinearLayout
     private lateinit var content: LinearLayout
     private lateinit var shizukuChip: TextView
     private lateinit var shizukuInfo: TextView
+    private lateinit var appsBox: LinearLayout
     private val pkgChips = HashMap<String, TextView>()
+    private var lastDiag: Map<String, Doze.Diag> = emptyMap()
     private lateinit var button: Button
     private lateinit var hint: TextView
     private lateinit var logToggle: Button
@@ -169,7 +175,7 @@ class MainActivity : Activity() {
             setPadding(dp(14), 0, 0, 0)
         }
         titles.addView(tv("GMS Keeper", 22f, Color.WHITE, bold = true))
-        titles.addView(tv("Giữ thông báo Google luôn sống", 13f, Color.parseColor("#BFD6FA")))
+        titles.addView(tv("Giữ thông báo luôn sống", 13f, Color.parseColor("#BFD6FA")))
         top.addView(titles)
         header.addView(top)
 
@@ -191,8 +197,16 @@ class MainActivity : Activity() {
         // Card Google
         val c2 = card()
         c2.addView(tv("GOOGLE", 11f, cSub, bold = true))
-        c2.addView(pkgRow("Google Play Services", "com.google.android.gms"))
-        c2.addView(pkgRow("Google Services Framework", "com.google.android.gsf"))
+        c2.addView(pkgRow("Google Play Services", "com.google.android.gms", false))
+        c2.addView(pkgRow("Google Services Framework", "com.google.android.gsf", false))
+
+        // Card ứng dụng bảo vệ
+        val c3 = card()
+        c3.addView(tv("ỨNG DỤNG BẢO VỆ", 11f, cSub, bold = true))
+        c3.addView(tv("Chạm để xem chi tiết · giữ để bỏ", 11f, cSub).apply { setPadding(0, dp(2), 0, 0) })
+        appsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        c3.addView(appsBox)
+        c3.addView(textButton("＋ Thêm ứng dụng").apply { setOnClickListener { showPicker() } })
 
         // Nút chính
         button = Button(this).apply {
@@ -231,6 +245,7 @@ class MainActivity : Activity() {
         content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(c1)
         content.addView(c2)
+        content.addView(c3)
         content.addView(button)
         content.addView(hint)
         content.addView(logToggle)
@@ -252,14 +267,18 @@ class MainActivity : Activity() {
             content.setPadding(0, 0, 0, bars.bottom + dp(24))
             insets
         }
+        rebuildAppRows()
         setContentView(scroll)
     }
 
-    private fun pkgRow(name: String, pkg: String): View {
+    private fun pkgRow(name: String, pkg: String, removable: Boolean): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(12), 0, 0)
+            isClickable = true
+            setOnClickListener { showDetail(pkg, name) }
+            if (removable) setOnLongClickListener { confirmRemove(pkg, name); true }
         }
         val labels = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         labels.addView(tv(name, 15f, cText))
@@ -272,6 +291,20 @@ class MainActivity : Activity() {
         return row
     }
 
+    private fun labelOf(pkg: String): String = runCatching {
+        packageManager.getApplicationInfo(pkg, 0).loadLabel(packageManager).toString()
+    }.getOrDefault(pkg)
+
+    private fun rebuildAppRows() {
+        pkgChips.keys.retainAll(Doze.GOOGLE.toSet())
+        appsBox.removeAllViews()
+        val apps = Prefs.apps(this)
+        if (apps.isEmpty()) {
+            appsBox.addView(tv("Chưa có ứng dụng nào", 13f, cSub).apply { setPadding(0, dp(12), 0, 0) })
+        }
+        apps.forEach { appsBox.addView(pkgRow(labelOf(it), it, true)) }
+    }
+
     private fun toggleLog() {
         val show = logCard.visibility != View.VISIBLE
         logCard.visibility = if (show) View.VISIBLE else View.GONE
@@ -282,6 +315,109 @@ class MainActivity : Activity() {
         }
     }
 
+    // ---------- Thêm / bỏ app ----------
+
+    private fun showPicker() {
+        val pm = packageManager
+        val launchIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val items = pm.queryIntentActivities(launchIntent, 0)
+            .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
+            .distinctBy { it.first }
+            .filter { it.first != packageName && it.first !in Doze.GOOGLE }
+            .sortedBy { it.second.lowercase() }
+        val current = Prefs.apps(this).toMutableSet()
+        val checked = BooleanArray(items.size) { items[it].first in current }
+        AlertDialog.Builder(this)
+            .setTitle("Chọn ứng dụng cần bảo vệ")
+            .setMultiChoiceItems(items.map { it.second }.toTypedArray(), checked) { _, i, on ->
+                checked[i] = on
+            }
+            .setPositiveButton("Lưu") { _, _ ->
+                // giữ lại app đã lưu nhưng không hiện trong danh sách launcher
+                val visible = items.map { it.first }.toSet()
+                val kept = current.filter { it !in visible }
+                val picked = items.filterIndexed { i, _ -> checked[i] }.map { it.first }
+                Prefs.setApps(this, kept + picked)
+                rebuildAppRows()
+                refresh()
+            }
+            .setNegativeButton("Hủy", null)
+            .show()
+    }
+
+    private fun confirmRemove(pkg: String, name: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Bỏ $name?")
+            .setMessage("Ứng dụng sẽ không còn được áp dụng whitelist. Cài đặt đã áp dụng trước đó vẫn giữ nguyên trong hệ thống.")
+            .setPositiveButton("Bỏ") { _, _ ->
+                Prefs.setApps(this, Prefs.apps(this).filter { it != pkg })
+                rebuildAppRows()
+                refresh()
+            }
+            .setNegativeButton("Hủy", null)
+            .show()
+    }
+
+    // ---------- Chi tiết chẩn đoán ----------
+
+    private fun allowed(s: String) = s.contains("allow", ignoreCase = true)
+
+    private fun opName(s: String) = when {
+        allowed(s) -> "cho phép"
+        s.contains("ignore", true) || s.contains("deny", true) || s.contains("error", true) -> "bị chặn"
+        else -> "mặc định"
+    }
+
+    private fun bucketName(b: Int?) = when (b) {
+        5 -> "Exempted (5)"
+        10 -> "Active (10)"
+        20 -> "Working set (20)"
+        30 -> "Frequent (30)"
+        40 -> "Rare (40)"
+        45 -> "Restricted (45)"
+        50 -> "Never (50)"
+        null -> "không rõ"
+        else -> "$b"
+    }
+
+    private fun stateOf(d: Doze.Diag) = when {
+        !d.installed -> St.MISSING
+        d.stopped == true -> St.STOPPED
+        !d.whitelisted || !allowed(d.raib) -> St.PARTIAL
+        else -> St.OK
+    }
+
+    private fun detailText(d: Doze.Diag): String {
+        val lines = listOf(
+            "Tiến trình: " + if (d.pid.isNotBlank()) "đang chạy (pid ${d.pid.split(" ").first()})" else "không chạy lúc này",
+            "Standby bucket: " + bucketName(d.bucket),
+            "Whitelist Doze: " + if (d.whitelisted) "có" else "không",
+            "Chạy nền: " + opName(d.rib),
+            "Chạy nền không giới hạn: " + opName(d.raib),
+            "Force-stop: " + when (d.stopped) { true -> "có"; false -> "không"; null -> "không rõ" }
+        )
+        val advice = when (stateOf(d)) {
+            St.MISSING -> "Ứng dụng này chưa được cài."
+            St.STOPPED -> "App đang ở trạng thái force-stop nên không nhận thông báo. Mở app một lần, sau đó đừng vuốt tắt nó khỏi đa nhiệm (hãy khóa app)."
+            St.PARTIAL -> "Chưa áp dụng đủ. Bấm Áp dụng ở màn hình chính."
+            St.OK ->
+                if (d.pid.isBlank())
+                    "Hệ thống đã cho phép. Tiến trình không chạy lúc này: bình thường nếu app dùng FCM, nhưng nếu thông báo vẫn trễ thì nhiều khả năng HyperOS đang kill nền. Khóa app trong đa nhiệm, bật Tự khởi động, pin Không hạn chế."
+                else
+                    "Hệ thống đã cho phép. Nếu vẫn trễ thì nguyên nhân nằm ngoài Doze (trình quản lý pin của Xiaomi hoặc tự app quản lý)."
+        }
+        return lines.joinToString("\n") + "\n\n" + advice
+    }
+
+    private fun showDetail(pkg: String, name: String) {
+        val d = lastDiag[pkg]
+        AlertDialog.Builder(this)
+            .setTitle(name)
+            .setMessage(if (d == null) "Chưa có dữ liệu. Thử lại sau vài giây." else detailText(d))
+            .setPositiveButton("Đóng", null)
+            .show()
+    }
+
     // ---------- Logic ----------
 
     private fun setButtonEnabled(enabled: Boolean) {
@@ -289,7 +425,7 @@ class MainActivity : Activity() {
         button.alpha = if (enabled) 1f else 0.5f
     }
 
-    private fun clearChips() = Doze.PACKAGES.forEach { pkgChips[it]?.let { c -> setChip(c, "—", cSub) } }
+    private fun clearChips() = pkgChips.values.forEach { setChip(it, "—", cSub) }
 
     private fun onButton() {
         if (running) return
@@ -311,18 +447,23 @@ class MainActivity : Activity() {
                 setButtonEnabled(false)
                 hint.setTextColor(cSub)
                 hint.text = "Đang áp dụng..."
-                Doze.apply(this) { r ->
+                Doze.apply(this, Prefs.allPackages(this)) { r ->
                     runOnUiThread {
                         running = false
                         setButtonEnabled(true)
-                        showResult(r, applied = true)
+                        r.onSuccess {
+                            refresh(SimpleDateFormat("HH:mm:ss", Locale.US).format(Date()))
+                        }.onFailure {
+                            hint.setTextColor(cRed)
+                            hint.text = "Lỗi: ${it.message}. Mở log để xem chi tiết."
+                        }
                     }
                 }
             }
         }
     }
 
-    private fun refresh() {
+    private fun refresh(announceTime: String? = null) {
         val ready = Doze.shizukuReady()
         val perm = Doze.hasPermission()
         when {
@@ -342,29 +483,39 @@ class MainActivity : Activity() {
                 setChip(shizukuChip, "Sẵn sàng", cGreen)
                 shizukuInfo.text = Doze.info()
                 button.text = "Áp dụng"
-                Doze.readStatus(this) { r -> runOnUiThread { showResult(r, applied = false) } }
+                Doze.diag(this, Prefs.allPackages(this)) { r ->
+                    runOnUiThread { onDiag(r, announceTime) }
+                }
             }
         }
     }
 
-    private fun showResult(r: Result<String>, applied: Boolean) {
-        r.onSuccess { out ->
-            var all = true
-            Doze.PACKAGES.forEach { pkg ->
-                val ok = Doze.isWhitelisted(out, pkg)
-                if (!ok) all = false
-                pkgChips[pkg]?.let { c ->
-                    if (ok) setChip(c, "Đã whitelist", cGreen) else setChip(c, "Chưa", cRed)
+    private fun onDiag(r: Result<Map<String, Doze.Diag>>, announceTime: String?) {
+        r.onSuccess { map ->
+            lastDiag = map
+            var allOk = true
+            for ((pkg, c) in pkgChips) {
+                val d = map[pkg]
+                if (d == null) {
+                    setChip(c, "—", cSub)
+                    continue
+                }
+                val st = stateOf(d)
+                if (st != St.OK && st != St.MISSING) allOk = false
+                when (st) {
+                    St.OK -> setChip(c, "Đã bảo vệ", cGreen)
+                    St.PARTIAL -> setChip(c, "Chưa đủ", cAmber)
+                    St.STOPPED -> setChip(c, "Force-stop", cRed)
+                    St.MISSING -> setChip(c, "Chưa cài", cSub)
                 }
             }
-            if (applied) {
-                val t = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-                if (all) {
+            if (announceTime != null) {
+                if (allOk) {
                     hint.setTextColor(cGreen)
-                    hint.text = "Đã áp dụng lúc $t"
+                    hint.text = "Đã áp dụng lúc $announceTime"
                 } else {
                     hint.setTextColor(cAmber)
-                    hint.text = "Đã chạy lệnh nhưng chưa thấy trong whitelist. Xem log để biết lý do."
+                    hint.text = "Đã chạy lệnh nhưng còn app chưa đủ. Chạm vào app để xem chi tiết."
                 }
             }
         }.onFailure {

@@ -12,10 +12,21 @@ import java.lang.reflect.InvocationTargetException
 import java.util.concurrent.atomic.AtomicBoolean
 
 object Doze {
-    val PACKAGES = listOf("com.google.android.gms", "com.google.android.gsf")
+    val GOOGLE = listOf("com.google.android.gms", "com.google.android.gsf")
 
     private const val LIST_CMD = "dumpsys deviceidle whitelist"
     private const val TIMEOUT_MS = 10_000L
+
+    /** Kết quả chẩn đoán 1 app. */
+    data class Diag(
+        val installed: Boolean,
+        val pid: String,
+        val bucket: Int?,
+        val rib: String,   // RUN_IN_BACKGROUND
+        val raib: String,  // RUN_ANY_IN_BACKGROUND
+        val stopped: Boolean?,
+        val whitelisted: Boolean
+    )
 
     fun shizukuReady(): Boolean =
         !Shizuku.isPreV11() && Shizuku.pingBinder()
@@ -115,32 +126,80 @@ object Doze {
 
     private fun step(c: String) = "echo '>> $c'; $c 2>&1; echo \"exit=\$?\""
 
-    /** Whitelist Doze + appops + standby bucket cho GMS/GSF, rồi trả về danh sách mới. */
-    fun apply(ctx: Context, onResult: (Result<String>) -> Unit) {
-        val cmds = PACKAGES.flatMap { pkg ->
-            listOf(
-                "dumpsys deviceidle whitelist +$pkg",
-                "cmd appops set $pkg RUN_IN_BACKGROUND allow",
-                "cmd appops set $pkg RUN_ANY_IN_BACKGROUND allow",
-                "am set-standby-bucket $pkg active"
-            )
-        } + LIST_CMD
-        AppLog.add("Áp dụng. ${info()}")
+    private fun commandsFor(pkg: String) = listOf(
+        "dumpsys deviceidle whitelist +$pkg",
+        "cmd appops set $pkg RUN_IN_BACKGROUND allow",
+        "cmd appops set $pkg RUN_ANY_IN_BACKGROUND allow",
+        "am set-standby-bucket $pkg active"
+    )
+
+    /** Whitelist Doze + appops + standby bucket cho các package. */
+    fun apply(ctx: Context, pkgs: List<String>, onResult: (Result<String>) -> Unit) {
+        val cmds = pkgs.flatMap { commandsFor(it) }
+        AppLog.add("Áp dụng cho ${pkgs.size} package. ${info()}")
         run(ctx, cmds.joinToString("; ") { step(it) }, onResult)
     }
 
-    fun readStatus(ctx: Context, onResult: (Result<String>) -> Unit) = run(ctx, step(LIST_CMD), onResult)
+    private fun diagScript(pkgs: List<String>): String {
+        val parts = pkgs.map { p ->
+            listOf(
+                "echo \"##$p\"",
+                "echo \"path=\$(pm path $p 2>/dev/null)\"",
+                "echo \"pid=\$(pidof $p)\"",
+                "echo \"bucket=\$(am get-standby-bucket $p 2>&1)\"",
+                "echo \"rib=\$(cmd appops get $p RUN_IN_BACKGROUND 2>&1)\"",
+                "echo \"raib=\$(cmd appops get $p RUN_ANY_IN_BACKGROUND 2>&1)\"",
+                "echo \"stopped=\$(dumpsys package $p 2>/dev/null | grep -o 'stopped=[a-z]*' | head -1 | cut -d= -f2)\""
+            ).joinToString("; ")
+        }
+        return parts.joinToString("; ") + "; echo \"##whitelist\"; $LIST_CMD"
+    }
 
-    /** Output dạng "user,com.google.android.gms,10123" hoặc "system,..." */
-    fun isWhitelisted(output: String, pkg: String): Boolean =
-        output.lineSequence().any { it.contains(",$pkg,") }
+    fun diag(ctx: Context, pkgs: List<String>, onResult: (Result<Map<String, Diag>>) -> Unit) {
+        run(ctx, diagScript(pkgs)) { r ->
+            onResult(r.mapCatching { parseDiag(it, pkgs) })
+        }
+    }
+
+    private fun parseDiag(out: String, pkgs: List<String>): Map<String, Diag> {
+        val sections = HashMap<String, StringBuilder>()
+        var cur: StringBuilder? = null
+        for (line in out.lines()) {
+            if (line.startsWith("##")) {
+                cur = StringBuilder().also { sections[line.substring(2).trim()] = it }
+                continue
+            }
+            cur?.append(line)?.append('\n')
+        }
+        val wl = sections["whitelist"]?.toString().orEmpty()
+        return pkgs.associateWith { pkg ->
+            val s = sections[pkg]?.toString().orEmpty()
+            fun field(k: String): String {
+                val re = Regex("(?ms)^$k=(.*?)(?=^(?:path|pid|bucket|rib|raib|stopped)=|\\z)")
+                return re.find(s)?.groupValues?.get(1)?.trim().orEmpty()
+            }
+            Diag(
+                installed = field("path").startsWith("package:"),
+                pid = field("pid"),
+                bucket = Regex("\\d+").find(field("bucket"))?.value?.toIntOrNull(),
+                rib = field("rib"),
+                raib = field("raib"),
+                stopped = when (field("stopped")) {
+                    "true" -> true
+                    "false" -> false
+                    else -> null
+                },
+                whitelisted = wl.lineSequence().any { it.contains(",$pkg,") }
+            )
+        }
+    }
 
     private val autoBusy = AtomicBoolean(false)
 
     fun applyIfPossible(ctx: Context) {
         if (hasPermission() && autoBusy.compareAndSet(false, true)) {
             AppLog.add("Tự động áp dụng (binder/boot)")
-            apply(ctx) { autoBusy.set(false) }
+            apply(ctx, Prefs.allPackages(ctx)) { autoBusy.set(false) }
         }
     }
 }
