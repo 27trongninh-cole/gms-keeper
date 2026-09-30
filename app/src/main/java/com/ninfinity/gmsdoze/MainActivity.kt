@@ -51,6 +51,8 @@ class MainActivity : Activity() {
     private lateinit var appsBox: LinearLayout
     private val pkgChips = HashMap<String, TextView>()
     private var lastDiag: Map<String, Doze.Diag> = emptyMap()
+    private var lastFcm: Doze.Fcm? = null
+    private lateinit var fcmChip: TextView
     private lateinit var button: Button
     private lateinit var hint: TextView
     private lateinit var logToggle: Button
@@ -201,6 +203,7 @@ class MainActivity : Activity() {
         c2.addView(tv("GOOGLE", 11f, cSub, bold = true))
         c2.addView(pkgRow("Google Play Services", "com.google.android.gms", false))
         c2.addView(pkgRow("Google Services Framework", "com.google.android.gsf", false))
+        c2.addView(fcmRow())
 
         // Card ứng dụng bảo vệ
         val c3 = card()
@@ -288,6 +291,74 @@ class MainActivity : Activity() {
         pkgChips[pkg] = c
         row.addView(c)
         return row
+    }
+
+    private fun fcmRow(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, 0)
+            isClickable = true
+            setOnClickListener { showFcmDetail() }
+        }
+        val labels = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        labels.addView(tv("Kết nối FCM", 15f, cText))
+        labels.addView(tv("GMS → máy chủ Google (5228–5230)", 11f, cSub, mono = true))
+        row.addView(labels, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        fcmChip = chip()
+        setChip(fcmChip, "—", cSub)
+        row.addView(fcmChip)
+        return row
+    }
+
+    private enum class FcmSt { OK, FALLBACK, DOWN, UNKNOWN }
+
+    private fun fcmStateOf(f: Doze.Fcm) = when {
+        !f.readable || f.uid == null -> FcmSt.UNKNOWN
+        f.conns.any { it.port in 5228..5230 } -> FcmSt.OK
+        f.conns.isNotEmpty() -> FcmSt.FALLBACK
+        else -> FcmSt.DOWN
+    }
+
+    private fun renderFcm(f: Doze.Fcm) {
+        when (fcmStateOf(f)) {
+            FcmSt.OK -> setChip(fcmChip, "Đang kết nối", cGreen)
+            FcmSt.FALLBACK -> setChip(fcmChip, "Cổng dự phòng", cAmber)
+            FcmSt.DOWN -> setChip(fcmChip, "Không có kết nối", cRed)
+            FcmSt.UNKNOWN -> setChip(fcmChip, "Không đọc được", cSub)
+        }
+    }
+
+    private fun fcmDetailText(f: Doze.Fcm): String {
+        val fcmPort = f.conns.count { it.port in 5228..5230 }
+        val p443 = f.conns.count { it.port == 443 }
+        val lines = ArrayList<String>()
+        lines.add("UID của GMS: ${f.uid ?: "không rõ"}")
+        lines.add("Kết nối TCP đang mở: ${f.conns.size}")
+        lines.add("Tới cổng 5228–5230: $fcmPort")
+        lines.add("Tới cổng 443: $p443")
+        f.conns.take(8).forEach { lines.add("  ${it.ip}:${it.port}") }
+        val advice = when (fcmStateOf(f)) {
+            FcmSt.OK ->
+                "GMS đang giữ kết nối FCM tới Google. Nếu thông báo vẫn trễ thì kết nối này có thể đã chết ngầm (router hoặc NAT cắt kết nối rảnh, mạng ngủ khi tắt màn hình) hoặc bị VPN làm chậm. Thử tắt WARP/VPN, tắt ngủ Wi-Fi, thử bằng 4G."
+            FcmSt.FALLBACK ->
+                "GMS có kết nối nhưng không tới cổng 5228–5230. FCM đang đi qua cổng dự phòng vì cổng chính bị chặn (router, nhà mạng hoặc VPN). Kiểu này chậm và hay rớt. Tắt WARP/VPN, thử mạng khác."
+            FcmSt.DOWN ->
+                "GMS không có kết nối TCP nào đang mở, tức FCM đang đứt. Thử tắt WARP/VPN, bật rồi tắt chế độ máy bay. Nếu lặp lại sau mỗi lần tắt màn hình thì nghi HyperOS cắt mạng nền của GMS."
+            FcmSt.UNKNOWN ->
+                "Máy không cho đọc /proc/net nên không kiểm tra được kết nối."
+        }
+        return lines.joinToString("\n") + "\n\n" + advice +
+            "\n\nĐây là ảnh chụp tại thời điểm bấm, kết nối có thể thay đổi khi màn hình tắt."
+    }
+
+    private fun showFcmDetail() {
+        val f = lastFcm
+        AlertDialog.Builder(this)
+            .setTitle("Kết nối FCM")
+            .setMessage(if (f == null) "Chưa có dữ liệu. Thử lại sau vài giây." else fcmDetailText(f))
+            .setPositiveButton("Đóng", null)
+            .show()
     }
 
     private fun labelOf(pkg: String): String = runCatching {
@@ -518,7 +589,10 @@ class MainActivity : Activity() {
         button.alpha = if (enabled) 1f else 0.5f
     }
 
-    private fun clearChips() = pkgChips.values.forEach { setChip(it, "—", cSub) }
+    private fun clearChips() {
+        pkgChips.values.forEach { setChip(it, "—", cSub) }
+        setChip(fcmChip, "—", cSub)
+    }
 
     private fun onButton() {
         if (running) return
@@ -583,9 +657,12 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun onDiag(r: Result<Map<String, Doze.Diag>>, announceTime: String?) {
-        r.onSuccess { map ->
+    private fun onDiag(r: Result<Doze.DiagResult>, announceTime: String?) {
+        r.onSuccess { res ->
+            val map = res.apps
             lastDiag = map
+            lastFcm = res.fcm
+            renderFcm(res.fcm)
             var allOk = true
             for ((pkg, c) in pkgChips) {
                 val d = map[pkg]
