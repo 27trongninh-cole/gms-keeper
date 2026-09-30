@@ -11,6 +11,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -54,7 +55,8 @@ class MainActivity : Activity() {
     private lateinit var hint: TextView
     private lateinit var logToggle: Button
     private lateinit var logCard: LinearLayout
-    private lateinit var logText: TextView
+    private lateinit var logList: LinearLayout
+    private var logRenderPending = false
     private var running = false
 
     private val binderListener = Shizuku.OnBinderReceivedListener { runOnUiThread { refresh() } }
@@ -76,7 +78,7 @@ class MainActivity : Activity() {
         window.insetsController?.setSystemBarsAppearance(
             0, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
         )
-        AppLog.listener = { runOnUiThread { logText.text = AppLog.text() } }
+        AppLog.listener = { runOnUiThread { scheduleLogRender() } }
         Shizuku.addBinderReceivedListenerSticky(binderListener)
         Shizuku.addBinderDeadListener(deadListener)
         Shizuku.addRequestPermissionResultListener(permListener)
@@ -232,15 +234,12 @@ class MainActivity : Activity() {
             setOnClickListener { toggleLog() }
         }
         logCard = card().apply { visibility = View.GONE }
-        logText = tv(AppLog.text(), 11f, cText, mono = true).apply { setTextIsSelectable(true) }
-        logCard.addView(logText)
-        logCard.addView(textButton("Sao chép log").apply {
-            setOnClickListener {
-                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("log", AppLog.text()))
-                Toast.makeText(this@MainActivity, "Đã sao chép log", Toast.LENGTH_SHORT).show()
-            }
+        logCard.addView(tv("NHẬT KÝ", 11f, cSub, bold = true))
+        logCard.addView(tv("Mỗi giai đoạn có nút sao chép riêng · chạm nội dung để mở rộng", 11f, cSub).apply {
+            setPadding(0, dp(2), 0, 0)
         })
+        logList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        logCard.addView(logList)
 
         content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(c1)
@@ -309,10 +308,87 @@ class MainActivity : Activity() {
         val show = logCard.visibility != View.VISIBLE
         logCard.visibility = if (show) View.VISIBLE else View.GONE
         logToggle.text = if (show) "Ẩn log" else "Hiện log"
-        if (show) {
-            logText.text = AppLog.text()
-            scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+        if (show) renderLog()
+    }
+
+    // ---------- Log theo giai đoạn ----------
+
+    private fun smallButton(text: String, onClick: () -> Unit) = Button(this).apply {
+        this.text = text
+        isAllCaps = false
+        textSize = 12f
+        setTextColor(cBlue)
+        stateListAnimator = null
+        background = rounded((cBlue and 0xFFFFFF) or (0x22 shl 24), 12)
+        minWidth = 0
+        minHeight = 0
+        minimumWidth = 0
+        minimumHeight = 0
+        setPadding(dp(12), dp(6), dp(12), dp(6))
+        setOnClickListener { onClick() }
+    }
+
+    private fun copyToClipboard(text: String, label: String) {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("log", text))
+        Toast.makeText(this, "Đã sao chép: $label", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun scheduleLogRender() {
+        if (logCard.visibility != View.VISIBLE || logRenderPending) return
+        logRenderPending = true
+        logList.postDelayed({
+            logRenderPending = false
+            renderLog()
+        }, 200)
+    }
+
+    private fun renderLog() {
+        logList.removeAllViews()
+        val stages = AppLog.all().asReversed() // mới nhất ở trên
+        if (stages.isEmpty()) {
+            logList.addView(tv("Chưa có log", 13f, cSub).apply { setPadding(0, dp(10), 0, 0) })
+            return
         }
+        stages.forEach { logList.addView(stageView(it)) }
+    }
+
+    private fun stageView(st: AppLog.Stage): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded((cText and 0xFFFFFF) or (0x12 shl 24), 12)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, dp(10), 0, 0) }
+        }
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val mark = when (st.ok) { true -> "✓"; false -> "✗"; null -> "…" }
+        val markColor = when (st.ok) { true -> cGreen; false -> cRed; null -> cSub }
+        head.addView(
+            tv("${st.time}  ${st.title}", 12f, cText, bold = true),
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        head.addView(tv(mark, 14f, markColor, bold = true).apply { setPadding(dp(8), 0, dp(8), 0) })
+        head.addView(smallButton("Sao chép") { copyToClipboard(st.copyText(), st.title) })
+
+        val body = tv(st.body(), 11f, cSub, mono = true).apply {
+            maxLines = 6
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(0, dp(8), 0, 0)
+            var expanded = false
+            setOnClickListener {
+                expanded = !expanded
+                maxLines = if (expanded) Int.MAX_VALUE else 6
+            }
+        }
+        box.addView(head)
+        box.addView(body)
+        return box
     }
 
     // ---------- Thêm / bỏ app ----------
@@ -380,40 +456,60 @@ class MainActivity : Activity() {
         else -> "$b"
     }
 
-    private fun stateOf(d: Doze.Diag) = when {
+    private fun isLaunchable(pkg: String) = packageManager.getLaunchIntentForPackage(pkg) != null
+
+    private fun autoBlocked(s: String) = s.contains("ignore", true) || s.contains("deny", true)
+
+    private fun autoName(s: String) = when {
+        allowed(s) -> "cho phép"
+        autoBlocked(s) -> "bị chặn"
+        else -> "không rõ"
+    }
+
+    private fun stateOf(pkg: String, d: Doze.Diag) = when {
         !d.installed -> St.MISSING
-        d.stopped == true -> St.STOPPED
-        !d.whitelisted || !allowed(d.raib) -> St.PARTIAL
+        // App không có màn hình mở được (vd GSF) thì force-stop không phải lỗi người dùng sửa được
+        d.stopped == true && isLaunchable(pkg) -> St.STOPPED
+        !d.whitelisted || !allowed(d.raib) || autoBlocked(d.auto) -> St.PARTIAL
         else -> St.OK
     }
 
-    private fun detailText(d: Doze.Diag): String {
+    private fun detailText(pkg: String, d: Doze.Diag): String {
+        val launchable = isLaunchable(pkg)
         val lines = listOf(
             "Tiến trình: " + if (d.pid.isNotBlank()) "đang chạy (pid ${d.pid.split(" ").first()})" else "không chạy lúc này",
             "Standby bucket: " + bucketName(d.bucket),
             "Whitelist Doze: " + if (d.whitelisted) "có" else "không",
             "Chạy nền: " + opName(d.rib),
             "Chạy nền không giới hạn: " + opName(d.raib),
+            "Tự khởi động (Xiaomi): " + autoName(d.auto),
             "Force-stop: " + when (d.stopped) { true -> "có"; false -> "không"; null -> "không rõ" }
         )
-        val advice = when (stateOf(d)) {
+        val advice = when (stateOf(pkg, d)) {
             St.MISSING -> "Ứng dụng này chưa được cài."
             St.STOPPED -> "App đang ở trạng thái force-stop nên không nhận thông báo. Mở app một lần, sau đó đừng vuốt tắt nó khỏi đa nhiệm (hãy khóa app)."
-            St.PARTIAL -> "Chưa áp dụng đủ. Bấm Áp dụng ở màn hình chính."
+            St.PARTIAL ->
+                if (autoBlocked(d.auto)) "Tự khởi động đang bị chặn nên HyperOS không cho FCM dựng lại app. Bấm Áp dụng, hoặc bật tay trong Bảo mật → Quyền → Tự khởi động."
+                else "Chưa áp dụng đủ. Bấm Áp dụng ở màn hình chính."
             St.OK ->
-                if (d.pid.isBlank())
-                    "Hệ thống đã cho phép. Tiến trình không chạy lúc này: bình thường nếu app dùng FCM, nhưng nếu thông báo vẫn trễ thì nhiều khả năng HyperOS đang kill nền. Khóa app trong đa nhiệm, bật Tự khởi động, pin Không hạn chế."
+                if (d.stopped == true && !launchable)
+                    "Gói này không có màn hình để mở, nên force-stop thường vô hại: thông báo FCM do Google Play Services xử lý, không phụ thuộc gói này."
+                else if (d.pid.isBlank())
+                    "Hệ thống đã cho phép. Tiến trình không chạy lúc này (HyperOS đã kill hoặc bạn đã vuốt tắt). FCM vẫn dựng lại được app nếu Tự khởi động cho phép. Nếu vẫn trễ: pin Không hạn chế và khóa app trong đa nhiệm."
                 else
                     "Hệ thống đã cho phép. Nếu vẫn trễ thì nguyên nhân nằm ngoài Doze (trình quản lý pin của Xiaomi hoặc tự app quản lý)."
         }
-        return lines.joinToString("\n") + "\n\n" + advice
+        return lines.joinToString("
+") + "
+
+" + advice
     }
 
     private fun showDetail(pkg: String, name: String) {
         val d = lastDiag[pkg]
         AlertDialog.Builder(this)
             .setTitle(name)
-            .setMessage(if (d == null) "Chưa có dữ liệu. Thử lại sau vài giây." else detailText(d))
+            .setMessage(if (d == null) "Chưa có dữ liệu. Thử lại sau vài giây." else detailText(pkg, d))
             .setPositiveButton("Đóng", null)
             .show()
     }
@@ -500,7 +596,7 @@ class MainActivity : Activity() {
                     setChip(c, "—", cSub)
                     continue
                 }
-                val st = stateOf(d)
+                val st = stateOf(pkg, d)
                 if (st != St.OK && st != St.MISSING) allOk = false
                 when (st) {
                     St.OK -> setChip(c, "Đã bảo vệ", cGreen)
