@@ -152,6 +152,45 @@ object Doze {
         "am broadcast -a com.google.android.intent.action.GTALK_HEARTBEAT -p com.google.android.gms"
     ).joinToString("; ") { step(it) }
 
+    /**
+     * Đo xem nhịp có tạo thêm lưu lượng trên kết nối FCM không: chụp số byte (ss -i) 3 giây không gửi nhịp,
+     * rồi 3 giây có gửi nhịp, và so sánh.
+     */
+    fun probeScript(): String {
+        val ss = "ss -tien 2>&1 | grep -A1 -E ':(5228|5229|5230) '"
+        return "echo '##A'; $ss; sleep 3; echo '##B'; $ss; ${heartbeatScript()}; sleep 3; echo '##C'; $ss"
+    }
+
+    fun interpretProbe(out: String): String {
+        val m = Regex("(?s)##A(.*?)##B(.*?)##C(.*)").find(out)
+            ?: return "Không đọc được kết quả đo."
+        fun bytes(s: String): Pair<Long, Long>? {
+            val sent = Regex("bytes_sent:(\\d+)").find(s)?.groupValues?.get(1)?.toLongOrNull()
+            val recv = Regex("bytes_received:(\\d+)").find(s)?.groupValues?.get(1)?.toLongOrNull()
+            return if (sent != null && recv != null) sent to recv else null
+        }
+        val a = bytes(m.groupValues[1])
+        val b = bytes(m.groupValues[2])
+        val c = bytes(m.groupValues[3])
+        if (a == null || b == null || c == null) {
+            return "Không đo được: máy thiếu lệnh ss hoặc không có số liệu byte, hoặc GMS không có kết nối FCM lúc đo."
+        }
+        val ctlS = b.first - a.first
+        val ctlR = b.second - a.second
+        val hbS = c.first - b.first
+        val hbR = c.second - b.second
+        if (minOf(minOf(ctlS, ctlR), minOf(hbS, hbR)) < 0) {
+            return "Kết nối vừa bị đổi giữa lúc đo nên số liệu không đúng. Đo lại."
+        }
+        val verdict = if (hbS - ctlS >= 16 || hbR - ctlR >= 16) {
+            "Nhịp CÓ tạo thêm lưu lượng trên kết nối FCM, nhiều khả năng có tác dụng."
+        } else {
+            "Không thấy khác biệt. GMS có thể đang bỏ qua nhịp này."
+        }
+        return "3 giây không gửi nhịp: +$ctlS byte gửi, +$ctlR byte nhận.\n" +
+            "3 giây có gửi nhịp: +$hbS byte gửi, +$hbR byte nhận.\n" + verdict
+    }
+
     /** Whitelist Doze + appops + standby bucket cho các package. */
     fun apply(
         ctx: Context,

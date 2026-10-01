@@ -522,6 +522,7 @@ class MainActivity : Activity() {
         hbStatus = tv("", 12f, cSub).apply { setPadding(0, dp(12), 0, 0) }
         c.addView(hbStatus)
         c.addView(textButton("Gửi thử 1 nhịp").apply { setOnClickListener { sendTestBeat() } })
+        c.addView(textButton("Đo hiệu quả (≈7 giây)").apply { setOnClickListener { measureBeat() } })
         hbExactBtn = textButton("Cấp quyền báo thức chính xác").apply {
             visibility = View.GONE
             setOnClickListener { requestExactAlarm() }
@@ -550,6 +551,27 @@ class MainActivity : Activity() {
         Heartbeat.sendNow(this) {
             runOnUiThread {
                 hint.text = "Đã gửi thử. Xem khối Giữ nhịp (gửi thử) trong log."
+                renderHb()
+            }
+        }
+    }
+
+    private fun measureBeat() {
+        if (!Doze.hasPermission()) {
+            hint.setTextColor(cRed)
+            hint.text = "Cần Shizuku đang chạy và đã cấp quyền để đo."
+            return
+        }
+        hint.setTextColor(cSub)
+        hint.text = "Đang đo (khoảng 7 giây), đừng thoát app..."
+        Heartbeat.measure(this) { msg ->
+            runOnUiThread {
+                hint.text = "Đã đo xong."
+                AlertDialog.Builder(this)
+                    .setTitle("Hiệu quả của nhịp")
+                    .setMessage(msg + "\n\nĐo 2–3 lần để chắc chắn, vì lưu lượng nền của GMS có thể gây nhiễu.")
+                    .setPositiveButton("Đóng", null)
+                    .show()
                 renderHb()
             }
         }

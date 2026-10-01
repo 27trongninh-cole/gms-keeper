@@ -159,6 +159,16 @@ object Heartbeat {
         }
     }
 
+    /** Nút "Đo hiệu quả": trả về kết luận dạng chữ. */
+    fun measure(ctx: Context, done: (String) -> Unit) {
+        val st = AppLog.begin("Đo hiệu quả nhịp")
+        Doze.run(ctx, Doze.probeScript(), st) { r ->
+            val msg = r.fold({ Doze.interpretProbe(it) }, { "Lỗi: ${it.message}" })
+            st.add("Kết luận: $msg")
+            done(msg)
+        }
+    }
+
     fun statusText(ctx: Context): String {
         if (!enabled(ctx)) return "Đang tắt"
         val p = sp(ctx)
