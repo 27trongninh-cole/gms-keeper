@@ -186,14 +186,59 @@ object Doze {
         return lines.joinToString("\n") + "\n\n" + verdict
     }
 
-    /** Chụp trạng thái chặn mạng nền của hệ thống (netpolicy/firewall) để phân tích. */
+    /** Chụp trạng thái chặn mạng nền của hệ thống (netpolicy/firewall/Doze) để phân tích. */
     fun netScript(pkgs: List<String>): String {
-        val uids = pkgs.joinToString("; ") {
-            "echo \"$it: \$(dumpsys package $it 2>/dev/null | grep -m1 -o 'userId=[0-9]*')\""
+        val loop = pkgs.joinToString("; ") {
+            "u=\$(pm list packages -U $it 2>/dev/null | grep \"package:$it \" | sed 's/.*uid://'); " +
+                "echo \"uid $it=\$u\"; [ -n \"\$u\" ] && ALL=\"\$ALL|\$u\""
         }
-        return "echo '##uids'; $uids; " +
-            "echo '##netpolicy'; dumpsys netpolicy 2>&1 | head -150; " +
-            "echo '##connectivity'; dumpsys connectivity 2>&1 | grep -iE 'block|firewall|chain|restrict|idle|standby' | head -80"
+        return "ALL=99999999; $loop; " +
+            "echo '##netpolicy'; dumpsys netpolicy 2>&1 | grep -E \"Restrict|Device idle|Low Power|Restricted networking|UID=(\$ALL) \"; " +
+            "echo '##trafficcontroller'; dumpsys connectivity trafficcontroller 2>&1 | head -60; " +
+            "echo '##trafficcontroller-uids'; dumpsys connectivity trafficcontroller 2>&1 | grep -E \"(^|[^0-9])(\$ALL)([^0-9]|\$)\" | head -40; " +
+            "echo '##deviceidle'; dumpsys deviceidle 2>&1 | grep -E 'mState=|mLightState=|mDeepEnabled|mLightEnabled|mScreenOn=|mCharging=|mForceIdle=|mNetworkConnected=' | head -12"
+    }
+
+    /** Bản gọn để chạy trong receiver (vài giây): màn hình, Doze, chính sách mạng, whitelist, kết nối TCP. */
+    fun timedScript(): String =
+        "echo '##screen'; dumpsys power 2>&1 | grep -E 'mWakefulness=|Display Power: state=' | head -3; " +
+            "echo '##deviceidle'; dumpsys deviceidle 2>&1 | grep -E 'mState=|mLightState=|mScreenOn=|mNetworkConnected=' | head -6; " +
+            "echo '##netpolicy'; dumpsys netpolicy 2>&1 | grep -E 'Restrict background|Restrict power|Device idle|Low Power Standby|Restricted networking'; " +
+            "echo '##whitelist'; dumpsys deviceidle whitelist 2>&1 | grep -E '^user,'; " +
+            "echo '##fcm'; cat /proc/net/tcp /proc/net/tcp6 2>&1 | " +
+            "grep -E '^ *[0-9]+: [0-9A-Fa-f]+:[0-9A-Fa-f]+ [0-9A-Fa-f]+:[0-9A-Fa-f]+ 01 |denied|No such file'"
+
+    fun sectionsOf(out: String): Map<String, String> {
+        val map = LinkedHashMap<String, StringBuilder>()
+        var cur: StringBuilder? = null
+        for (line in out.lines()) {
+            if (line.startsWith("##")) {
+                cur = StringBuilder().also { map[line.substring(2).trim()] = it }
+                continue
+            }
+            cur?.append(line)?.append('\n')
+        }
+        return map.mapValues { it.value.toString() }
+    }
+
+    fun parseFcmFrom(out: String): Fcm {
+        val s = sectionsOf(out)
+        return parseFcm(s["fcm"].orEmpty(), s["whitelist"].orEmpty())
+    }
+
+    /** Các kết nối TCP ESTABLISHED gom theo uid (từ dòng /proc/net/tcp*). */
+    fun connsByUid(sec: String): Map<Int, List<Conn>> {
+        val map = HashMap<Int, MutableList<Conn>>()
+        for (line in sec.lineSequence()) {
+            val t = line.trim().split(Regex("\\s+"))
+            if (t.size < 8 || t[3] != "01") continue
+            val uid = t[7].toIntOrNull() ?: continue
+            val rem = t[2]
+            val port = rem.substringAfterLast(':').toIntOrNull(16) ?: continue
+            val lport = t[1].substringAfterLast(':').toIntOrNull(16) ?: 0
+            map.getOrPut(uid) { ArrayList() }.add(Conn(hexIp(rem.substringBeforeLast(':')), port, lport))
+        }
+        return map
     }
 
     fun netSnapshot(ctx: Context, pkgs: List<String>, onDone: () -> Unit) {

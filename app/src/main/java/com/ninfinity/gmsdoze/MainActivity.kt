@@ -225,6 +225,8 @@ class MainActivity : Activity() {
         c2.addView(pkgRow("Google Services Framework", "com.google.android.gsf", false))
         c2.addView(fcmRow())
         c2.addView(textButton("Chụp trạng thái mạng").apply { setOnClickListener { snapNet() } })
+        c2.addView(textButton("Chụp hẹn giờ sau 10 phút").apply { setOnClickListener { scheduleSnap() } })
+        c2.addView(textButton("Xem kết quả chụp hẹn giờ").apply { setOnClickListener { showSnap() } })
 
         // Card ứng dụng bảo vệ
         val c3 = card()
@@ -576,6 +578,33 @@ class MainActivity : Activity() {
                 renderHb()
             }
         }
+    }
+
+    private fun scheduleSnap() {
+        if (!Doze.hasPermission()) {
+            hint.setTextColor(cRed)
+            hint.text = "Cần Shizuku đang chạy và đã cấp quyền thì chụp hẹn giờ mới hoạt động."
+            return
+        }
+        Snapshot.schedule(this, 10)
+        hint.setTextColor(cSub)
+        hint.text = "Đã hẹn chụp sau 10 phút. Tắt màn hình ngay và để máy yên. Sau khi qua 10 phút, mở lại rồi bấm Xem kết quả chụp hẹn giờ."
+    }
+
+    private fun showSnap() {
+        val t = Snapshot.savedText(this)
+        if (t == null) {
+            val left = (Snapshot.dueMs(this) - System.currentTimeMillis()) / 60000
+            hint.setTextColor(cSub)
+            hint.text = if (left > 0) "Còn khoảng $left phút nữa mới chụp." else "Chưa có kết quả chụp hẹn giờ."
+            return
+        }
+        val st = AppLog.begin("Chụp hẹn giờ (đã lưu)")
+        st.add(t)
+        st.ok = true
+        hint.setTextColor(cSub)
+        hint.text = "Đã nạp kết quả vào log. Bấm Sao chép ở khối đó."
+        if (logCard.visibility != View.VISIBLE) toggleLog() else renderLog()
     }
 
     private fun snapNet() {
