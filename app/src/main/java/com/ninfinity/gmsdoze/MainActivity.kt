@@ -224,6 +224,7 @@ class MainActivity : Activity() {
         c2.addView(pkgRow("Google Play Services", "com.google.android.gms", false))
         c2.addView(pkgRow("Google Services Framework", "com.google.android.gsf", false))
         c2.addView(fcmRow())
+        c2.addView(textButton("Chụp trạng thái mạng").apply { setOnClickListener { snapNet() } })
 
         // Card ứng dụng bảo vệ
         val c3 = card()
@@ -573,6 +574,22 @@ class MainActivity : Activity() {
                     .setPositiveButton("Đóng", null)
                     .show()
                 renderHb()
+            }
+        }
+    }
+
+    private fun snapNet() {
+        if (!Doze.hasPermission()) {
+            hint.setTextColor(cRed)
+            hint.text = "Cần Shizuku đang chạy và đã cấp quyền để chụp."
+            return
+        }
+        hint.setTextColor(cSub)
+        hint.text = "Đang chụp trạng thái mạng..."
+        Doze.netSnapshot(this, Prefs.allPackages(this)) {
+            runOnUiThread {
+                hint.text = "Đã chụp. Mở khối \"Trạng thái mạng\" trong log và bấm Sao chép."
+                if (logCard.visibility != View.VISIBLE) toggleLog() else renderLog()
             }
         }
     }

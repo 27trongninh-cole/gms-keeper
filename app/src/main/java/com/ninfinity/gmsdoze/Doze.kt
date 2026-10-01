@@ -186,6 +186,21 @@ object Doze {
         return lines.joinToString("\n") + "\n\n" + verdict
     }
 
+    /** Chụp trạng thái chặn mạng nền của hệ thống (netpolicy/firewall) để phân tích. */
+    fun netScript(pkgs: List<String>): String {
+        val uids = pkgs.joinToString("; ") {
+            "echo \"$it: \$(dumpsys package $it 2>/dev/null | grep -m1 -o 'userId=[0-9]*')\""
+        }
+        return "echo '##uids'; $uids; " +
+            "echo '##netpolicy'; dumpsys netpolicy 2>&1 | head -150; " +
+            "echo '##connectivity'; dumpsys connectivity 2>&1 | grep -iE 'block|firewall|chain|restrict|idle|standby' | head -80"
+    }
+
+    fun netSnapshot(ctx: Context, pkgs: List<String>, onDone: () -> Unit) {
+        val st = AppLog.begin("Trạng thái mạng")
+        run(ctx, netScript(pkgs), st) { onDone() }
+    }
+
     /** Whitelist Doze + appops + standby bucket cho các package. */
     fun apply(
         ctx: Context,
