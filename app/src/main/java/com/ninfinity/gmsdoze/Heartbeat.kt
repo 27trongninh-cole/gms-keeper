@@ -159,11 +159,11 @@ object Heartbeat {
         }
     }
 
-    /** Nút "Đo hiệu quả": trả về kết luận dạng chữ. */
+    /** Nút "Kiểm tra GMS có xử lý nhịp": trả về kết luận dạng chữ. */
     fun measure(ctx: Context, done: (String) -> Unit) {
-        val st = AppLog.begin("Đo hiệu quả nhịp")
-        Doze.run(ctx, Doze.probeScript(), st) { r ->
-            val msg = r.fold({ Doze.interpretProbe(it) }, { "Lỗi: ${it.message}" })
+        val st = AppLog.begin("Kiểm tra receiver nhịp")
+        Doze.run(ctx, Doze.receiverScript(), st) { r ->
+            val msg = r.fold({ Doze.interpretReceivers(it) }, { "Lỗi: ${it.message}" })
             st.add("Kết luận: $msg")
             done(msg)
         }

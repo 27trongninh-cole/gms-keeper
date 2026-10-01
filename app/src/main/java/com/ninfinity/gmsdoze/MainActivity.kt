@@ -522,7 +522,7 @@ class MainActivity : Activity() {
         hbStatus = tv("", 12f, cSub).apply { setPadding(0, dp(12), 0, 0) }
         c.addView(hbStatus)
         c.addView(textButton("Gửi thử 1 nhịp").apply { setOnClickListener { sendTestBeat() } })
-        c.addView(textButton("Đo hiệu quả (≈7 giây)").apply { setOnClickListener { measureBeat() } })
+        c.addView(textButton("Kiểm tra GMS có xử lý nhịp").apply { setOnClickListener { measureBeat() } })
         hbExactBtn = textButton("Cấp quyền báo thức chính xác").apply {
             visibility = View.GONE
             setOnClickListener { requestExactAlarm() }
@@ -559,17 +559,17 @@ class MainActivity : Activity() {
     private fun measureBeat() {
         if (!Doze.hasPermission()) {
             hint.setTextColor(cRed)
-            hint.text = "Cần Shizuku đang chạy và đã cấp quyền để đo."
+            hint.text = "Cần Shizuku đang chạy và đã cấp quyền để kiểm tra."
             return
         }
         hint.setTextColor(cSub)
-        hint.text = "Đang đo (khoảng 7 giây), đừng thoát app..."
+        hint.text = "Đang kiểm tra..."
         Heartbeat.measure(this) { msg ->
             runOnUiThread {
-                hint.text = "Đã đo xong."
+                hint.text = "Đã kiểm tra xong."
                 AlertDialog.Builder(this)
-                    .setTitle("Hiệu quả của nhịp")
-                    .setMessage(msg + "\n\nĐo 2–3 lần để chắc chắn, vì lưu lượng nền của GMS có thể gây nhiễu.")
+                    .setTitle("GMS có xử lý nhịp không?")
+                    .setMessage(msg)
                     .setPositiveButton("Đóng", null)
                     .show()
                 renderHb()

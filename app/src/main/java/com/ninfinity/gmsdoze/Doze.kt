@@ -152,43 +152,38 @@ object Doze {
         "am broadcast -a com.google.android.intent.action.GTALK_HEARTBEAT -p com.google.android.gms"
     ).joinToString("; ") { step(it) }
 
-    /**
-     * Đo xem nhịp có tạo thêm lưu lượng trên kết nối FCM không: chụp số byte (ss -i) 3 giây không gửi nhịp,
-     * rồi 3 giây có gửi nhịp, và so sánh.
-     */
-    fun probeScript(): String {
-        val ss = "ss -tien 2>&1 | grep -A1 -E ':(5228|5229|5230) '"
-        return "echo '##A'; $ss; sleep 3; echo '##B'; $ss; ${heartbeatScript()}; sleep 3; echo '##C'; $ss"
-    }
+    private val HEARTBEAT_ACTIONS = listOf(
+        "com.google.android.intent.action.MCS_HEARTBEAT",
+        "com.google.android.intent.action.GTALK_HEARTBEAT"
+    )
 
-    fun interpretProbe(out: String): String {
-        val m = Regex("(?s)##A(.*?)##B(.*?)##C(.*)").find(out)
-            ?: return "Không đọc được kết quả đo."
-        fun bytes(s: String): Pair<Long, Long>? {
-            val sent = Regex("bytes_sent:(\\d+)").find(s)?.groupValues?.get(1)?.toLongOrNull()
-            val recv = Regex("bytes_received:(\\d+)").find(s)?.groupValues?.get(1)?.toLongOrNull()
-            return if (sent != null && recv != null) sent to recv else null
+    /** Kiểm tra GMS/GSF có khai báo receiver tĩnh cho hai action nhịp hay không. */
+    fun receiverScript(): String =
+        HEARTBEAT_ACTIONS.joinToString("; ") { "echo '##$it'; cmd package query-receivers --brief -a $it 2>&1" }
+
+    fun interpretReceivers(out: String): String {
+        if (Regex("unknown command|usage:|Error:|not found", RegexOption.IGNORE_CASE).containsMatchIn(out) &&
+            !out.contains("com.google.android")
+        ) {
+            return "Không kiểm tra được: máy không hỗ trợ lệnh query-receivers."
         }
-        val a = bytes(m.groupValues[1])
-        val b = bytes(m.groupValues[2])
-        val c = bytes(m.groupValues[3])
-        if (a == null || b == null || c == null) {
-            return "Không đo được: máy thiếu lệnh ss hoặc không có số liệu byte, hoặc GMS không có kết nối FCM lúc đo."
+        val lines = ArrayList<String>()
+        var gms = false
+        for (a in HEARTBEAT_ACTIONS) {
+            val sec = Regex("(?s)##" + Regex.escape(a) + "(.*?)(?=##|\\z)").find(out)?.groupValues?.get(1).orEmpty()
+            val short = a.substringAfterLast('.')
+            when {
+                sec.contains("com.google.android.gms") -> { gms = true; lines.add("$short: GMS có receiver") }
+                sec.contains("com.google.android.gsf") -> lines.add("$short: chỉ GSF có receiver")
+                else -> lines.add("$short: không có receiver tĩnh nào")
+            }
         }
-        val ctlS = b.first - a.first
-        val ctlR = b.second - a.second
-        val hbS = c.first - b.first
-        val hbR = c.second - b.second
-        if (minOf(minOf(ctlS, ctlR), minOf(hbS, hbR)) < 0) {
-            return "Kết nối vừa bị đổi giữa lúc đo nên số liệu không đúng. Đo lại."
-        }
-        val verdict = if (hbS - ctlS >= 16 || hbR - ctlR >= 16) {
-            "Nhịp CÓ tạo thêm lưu lượng trên kết nối FCM, nhiều khả năng có tác dụng."
+        val verdict = if (gms) {
+            "GMS có khai báo receiver cho nhịp, nên lệnh nhiều khả năng được xử lý. Cần chạy thử dài hạn để biết có giúp ích không."
         } else {
-            "Không thấy khác biệt. GMS có thể đang bỏ qua nhịp này."
+            "Không thấy receiver tĩnh nào của GMS. Có thể GMS đăng ký động (không kiểm tra được từ ngoài) nhưng khả năng thấp. Chưa nên bật Giữ nhịp liên tục."
         }
-        return "3 giây không gửi nhịp: +$ctlS byte gửi, +$ctlR byte nhận.\n" +
-            "3 giây có gửi nhịp: +$hbS byte gửi, +$hbR byte nhận.\n" + verdict
+        return lines.joinToString("\n") + "\n\n" + verdict
     }
 
     /** Whitelist Doze + appops + standby bucket cho các package. */
