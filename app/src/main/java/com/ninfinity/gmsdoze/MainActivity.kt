@@ -1,6 +1,8 @@
 package com.ninfinity.gmsdoze
 
 import android.app.Activity
+import android.app.AlarmManager
+import android.app.TimePickerDialog
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -10,7 +12,10 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -21,6 +26,7 @@ import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import rikka.shizuku.Shizuku
@@ -52,6 +58,7 @@ class MainActivity : Activity() {
     private val pkgChips = HashMap<String, TextView>()
     private var lastDiag: Map<String, Doze.Diag> = emptyMap()
     private var lastFcm: Doze.Fcm? = null
+    private var lastTrack: Prefs.FcmTrack? = null
     private lateinit var fcmChip: TextView
     private lateinit var button: Button
     private lateinit var hint: TextView
@@ -60,6 +67,18 @@ class MainActivity : Activity() {
     private lateinit var logList: LinearLayout
     private var logRenderPending = false
     private var running = false
+
+    // Giữ nhịp
+    private lateinit var hbSwitch: Switch
+    private lateinit var hbSchedSwitch: Switch
+    private lateinit var hbSchedBox: LinearLayout
+    private lateinit var hbStartBtn: Button
+    private lateinit var hbEndBtn: Button
+    private lateinit var hbStatus: TextView
+    private lateinit var hbExactBtn: Button
+    private val hbIntervalBtns = ArrayList<Pair<Int, Button>>()
+    private val hbDayBtns = ArrayList<Button>()
+    private var hbBinding = false
 
     private val binderListener = Shizuku.OnBinderReceivedListener { runOnUiThread { refresh() } }
     private val deadListener = Shizuku.OnBinderDeadListener { runOnUiThread { refresh() } }
@@ -89,6 +108,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refresh()
+        renderHb()
     }
 
     override fun onDestroy() {
@@ -248,6 +268,7 @@ class MainActivity : Activity() {
         content.addView(c1)
         content.addView(c2)
         content.addView(c3)
+        content.addView(buildHbCard())
         content.addView(button)
         content.addView(hint)
         content.addView(logToggle)
@@ -337,10 +358,20 @@ class MainActivity : Activity() {
         lines.add("Kết nối TCP đang mở: ${f.conns.size}")
         lines.add("Tới cổng 5228–5230: $fcmPort")
         lines.add("Tới cổng 443: $p443")
-        f.conns.take(8).forEach { lines.add("  ${it.ip}:${it.port}") }
+        f.conns.take(8).forEach { lines.add("  ${it.ip}:${it.port}  (cổng nguồn ${it.lport})") }
+        val tr = lastTrack
+        if (tr != null && fcmStateOf(f) == FcmSt.OK) {
+            val fmt = SimpleDateFormat("HH:mm:ss", Locale.US)
+            val mins = (System.currentTimeMillis() - tr.sinceMs) / 60000
+            lines.add("Kết nối này thấy lần đầu: ${fmt.format(Date(tr.sinceMs))} (${mins} phút trước)")
+            lines.add(
+                "Số lần kết nối bị đổi: ${tr.changes}" +
+                    if (tr.lastChangeMs > 0) " (gần nhất ${fmt.format(Date(tr.lastChangeMs))})" else ""
+            )
+        }
         val advice = when (fcmStateOf(f)) {
             FcmSt.OK ->
-                "GMS đang giữ kết nối FCM tới Google. Nếu thông báo vẫn trễ thì kết nối này có thể đã chết ngầm (router hoặc NAT cắt kết nối rảnh, mạng ngủ khi tắt màn hình) hoặc bị VPN làm chậm. Thử tắt WARP/VPN, tắt ngủ Wi-Fi, thử bằng 4G."
+                "GMS đang giữ kết nối FCM tới Google. Cách dùng: kiểm tra trước khi tắt màn hình, rồi kiểm tra lại ngay khi thông báo trễ đến. Nếu mốc \"thấy lần đầu\" đổi hoặc số lần đổi tăng thì kết nối đã bị ngắt và nối lại giữa chừng (nghi mạng hoặc nhà mạng cắt kết nối rảnh). Nếu giữ nguyên thì kết nối vẫn sống và thông báo trễ do chỗ khác."
             FcmSt.FALLBACK ->
                 "GMS có kết nối nhưng không tới cổng 5228–5230. FCM đang đi qua cổng dự phòng vì cổng chính bị chặn (router, nhà mạng hoặc VPN). Kiểu này chậm và hay rớt. Tắt WARP/VPN, thử mạng khác."
             FcmSt.DOWN ->
@@ -380,6 +411,177 @@ class MainActivity : Activity() {
         logCard.visibility = if (show) View.VISIBLE else View.GONE
         logToggle.text = if (show) "Ẩn log" else "Hiện log"
         if (show) renderLog()
+    }
+
+    // ---------- Giữ nhịp ----------
+
+    private fun styleToggle(b: Button, on: Boolean) {
+        b.setTextColor(if (on) Color.WHITE else cBlue)
+        b.background = rounded(if (on) cBlue else ((cBlue and 0xFFFFFF) or (0x22 shl 24)), 12)
+    }
+
+    private fun switchRow(label: String, sw: Switch): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, dp(12), 0, 0)
+        addView(tv(label, 15f, cText), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addView(sw)
+    }
+
+    private fun fmtMin(m: Int) = String.format(Locale.US, "%02d:%02d", m / 60, m % 60)
+
+    private fun buildHbCard(): LinearLayout {
+        val c = card()
+        c.addView(tv("GIỮ NHỊP · THỬ NGHIỆM", 11f, cSub, bold = true))
+        c.addView(tv(
+            "Định kỳ gửi nhịp tới Google Play Services để giữ kết nối thông báo khỏi bị nhà mạng cắt. Tác dụng chung cho mọi app dùng FCM, không chọn theo từng app.",
+            12f, cSub
+        ).apply { setPadding(0, dp(4), 0, 0) })
+
+        hbSwitch = Switch(this)
+        hbSwitch.setOnCheckedChangeListener { _, on ->
+            if (!hbBinding) {
+                Heartbeat.setEnabled(this, on)
+                Heartbeat.scheduleNext(this)
+                renderHb()
+            }
+        }
+        c.addView(switchRow("Bật giữ nhịp", hbSwitch))
+
+        // Chu kỳ
+        val iv = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(10), 0, 0)
+        }
+        iv.addView(tv("Chu kỳ", 15f, cText), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        listOf(3, 5, 10).forEach { m ->
+            val b = smallButton("$m phút") {
+                Heartbeat.setInterval(this, m)
+                Heartbeat.scheduleNext(this)
+                renderHb()
+            }
+            hbIntervalBtns.add(m to b)
+            iv.addView(b, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(dp(6), 0, 0, 0) })
+        }
+        c.addView(iv)
+
+        // Lịch
+        hbSchedSwitch = Switch(this)
+        hbSchedSwitch.setOnCheckedChangeListener { _, on ->
+            if (!hbBinding) {
+                Heartbeat.setSchedOn(this, on)
+                Heartbeat.scheduleNext(this)
+                renderHb()
+            }
+        }
+        c.addView(switchRow("Chỉ chạy theo lịch", hbSchedSwitch))
+
+        hbSchedBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        val times = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(10), 0, 0)
+        }
+        val gap = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { setMargins(dp(8), 0, 0, 0) }
+        hbStartBtn = smallButton("07:00") { pickTime(true) }
+        hbEndBtn = smallButton("22:00") { pickTime(false) }
+        times.addView(tv("Hoạt động từ", 14f, cText))
+        times.addView(hbStartBtn, gap)
+        times.addView(tv("đến", 14f, cText), gap)
+        times.addView(hbEndBtn, gap)
+        hbSchedBox.addView(times)
+
+        val days = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(10), 0, 0)
+        }
+        listOf("T2", "T3", "T4", "T5", "T6", "T7", "CN").forEachIndexed { i, name ->
+            val b = smallButton(name) {
+                Heartbeat.toggleDay(this, i)
+                Heartbeat.scheduleNext(this)
+                renderHb()
+            }
+            b.setPadding(0, dp(8), 0, dp(8))
+            hbDayBtns.add(b)
+            days.addView(b, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                .apply { setMargins(dp(2), 0, dp(2), 0) })
+        }
+        hbSchedBox.addView(days)
+        hbSchedBox.addView(tv("Ngoài khung giờ và các ngày không chọn, app không gửi nhịp và không đánh thức máy.", 11f, cSub)
+            .apply { setPadding(0, dp(6), 0, 0) })
+        c.addView(hbSchedBox)
+
+        hbStatus = tv("", 12f, cSub).apply { setPadding(0, dp(12), 0, 0) }
+        c.addView(hbStatus)
+        c.addView(textButton("Gửi thử 1 nhịp").apply { setOnClickListener { sendTestBeat() } })
+        hbExactBtn = textButton("Cấp quyền báo thức chính xác").apply {
+            visibility = View.GONE
+            setOnClickListener { requestExactAlarm() }
+        }
+        c.addView(hbExactBtn)
+        return c
+    }
+
+    private fun pickTime(start: Boolean) {
+        val cur = if (start) Heartbeat.startMin(this) else Heartbeat.endMin(this)
+        TimePickerDialog(this, { _, h, m ->
+            if (start) Heartbeat.setStart(this, h * 60 + m) else Heartbeat.setEnd(this, h * 60 + m)
+            Heartbeat.scheduleNext(this)
+            renderHb()
+        }, cur / 60, cur % 60, true).show()
+    }
+
+    private fun sendTestBeat() {
+        if (!Doze.hasPermission()) {
+            hint.setTextColor(cRed)
+            hint.text = "Cần Shizuku đang chạy và đã cấp quyền để gửi nhịp."
+            return
+        }
+        hint.setTextColor(cSub)
+        hint.text = "Đang gửi thử 1 nhịp..."
+        Heartbeat.sendNow(this) {
+            runOnUiThread {
+                hint.text = "Đã gửi thử. Xem khối Giữ nhịp (gửi thử) trong log."
+                renderHb()
+            }
+        }
+    }
+
+    private fun requestExactAlarm() {
+        if (Build.VERSION.SDK_INT >= 31) {
+            runCatching {
+                startActivity(
+                    Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName"))
+                )
+            }
+        }
+    }
+
+    private fun renderHb() {
+        hbBinding = true
+        hbSwitch.isChecked = Heartbeat.enabled(this)
+        hbSchedSwitch.isChecked = Heartbeat.schedOn(this)
+        hbBinding = false
+        hbSchedBox.visibility = if (Heartbeat.schedOn(this)) View.VISIBLE else View.GONE
+        hbIntervalBtns.forEach { (m, b) -> styleToggle(b, m == Heartbeat.intervalMin(this)) }
+        hbStartBtn.text = fmtMin(Heartbeat.startMin(this))
+        hbEndBtn.text = fmtMin(Heartbeat.endMin(this))
+        styleToggle(hbStartBtn, false)
+        styleToggle(hbEndBtn, false)
+        val d = Heartbeat.days(this)
+        hbDayBtns.forEachIndexed { i, b -> styleToggle(b, ((d shr i) and 1) == 1) }
+        hbStatus.text = Heartbeat.statusText(this)
+        val am = getSystemService(AlarmManager::class.java)
+        val needExact = Build.VERSION.SDK_INT >= 31 && Heartbeat.enabled(this) && !am.canScheduleExactAlarms()
+        hbExactBtn.visibility = if (needExact) View.VISIBLE else View.GONE
     }
 
     // ---------- Log theo giai đoạn ----------
@@ -662,6 +864,11 @@ class MainActivity : Activity() {
             val map = res.apps
             lastDiag = map
             lastFcm = res.fcm
+            val cur = res.fcm.conns.firstOrNull { it.port in 5228..5230 }
+            lastTrack = Prefs.trackFcm(
+                this,
+                if (cur != null) "${cur.ip}:${cur.port}<-${cur.lport}" else "none"
+            )
             renderFcm(res.fcm)
             var allOk = true
             for ((pkg, c) in pkgChips) {

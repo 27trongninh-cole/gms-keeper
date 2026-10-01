@@ -15,8 +15,8 @@ android {
         applicationId = "com.ninfinity.gmsdoze"
         minSdk = 30            // Shizuku wireless debugging cần Android 11+
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.7"
+        versionCode = 11
+        versionName = "1.9"
     }
 
     // Keystore cố định (commit trong repo) để các bản build sau cài đè được lên bản cũ.

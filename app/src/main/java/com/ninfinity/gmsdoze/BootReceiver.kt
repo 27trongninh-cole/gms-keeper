@@ -6,10 +6,14 @@ import android.content.Intent
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        // Chỉ cần receiver này để process app được khởi động sau boot.
-        // Nếu Shizuku đã chạy thì áp dụng luôn; nếu chưa, listener trong App sẽ làm khi Shizuku lên.
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
-            Doze.applyIfPossible(context.applicationContext)
+        // Boot hoặc cập nhật app: dựng lại process, áp dụng lại whitelist (nếu Shizuku đã chạy)
+        // và đặt lại báo thức giữ nhịp (báo thức bị xoá sau reboot/cập nhật).
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
+            intent.action == Intent.ACTION_MY_PACKAGE_REPLACED
+        ) {
+            val app = context.applicationContext
+            Doze.applyIfPossible(app)
+            Heartbeat.scheduleNext(app)
         }
     }
 }

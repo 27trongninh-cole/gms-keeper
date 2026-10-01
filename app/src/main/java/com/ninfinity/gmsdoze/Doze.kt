@@ -29,7 +29,7 @@ object Doze {
         val whitelisted: Boolean
     )
 
-    data class Conn(val ip: String, val port: Int)
+    data class Conn(val ip: String, val port: Int, val lport: Int)
 
     /** Các kết nối TCP đang ESTABLISHED của GMS (đọc từ /proc/net/tcp*). */
     data class Fcm(val uid: Int?, val readable: Boolean, val conns: List<Conn>)
@@ -146,6 +146,12 @@ object Doze {
         "am set-standby-bucket $pkg active"
     )
 
+    /** Nhịp gửi tới GMS để giữ kết nối FCM (thử nghiệm: chưa kiểm chứng trên HyperOS 3.0). */
+    fun heartbeatScript(): String = listOf(
+        "am broadcast -a com.google.android.intent.action.MCS_HEARTBEAT -p com.google.android.gms",
+        "am broadcast -a com.google.android.intent.action.GTALK_HEARTBEAT -p com.google.android.gms"
+    ).joinToString("; ") { step(it) }
+
     /** Whitelist Doze + appops + standby bucket cho các package. */
     fun apply(
         ctx: Context,
@@ -232,7 +238,8 @@ object Doze {
                 if (t[7].toIntOrNull() != uid) continue
                 val rem = t[2]
                 val port = rem.substringAfterLast(':').toIntOrNull(16) ?: continue
-                conns.add(Conn(hexIp(rem.substringBeforeLast(':')), port))
+                val lport = t[1].substringAfterLast(':').toIntOrNull(16) ?: 0
+                conns.add(Conn(hexIp(rem.substringBeforeLast(':')), port, lport))
             }
         }
         return Fcm(uid, readable, conns)
