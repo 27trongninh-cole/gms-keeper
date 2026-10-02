@@ -1,8 +1,6 @@
 package com.ninfinity.gmsdoze
 
 import android.app.Activity
-import android.app.AlarmManager
-import android.app.TimePickerDialog
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -12,10 +10,7 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -26,7 +21,6 @@ import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import rikka.shizuku.Shizuku
@@ -68,17 +62,6 @@ class MainActivity : Activity() {
     private var logRenderPending = false
     private var running = false
 
-    // Giữ nhịp
-    private lateinit var hbSwitch: Switch
-    private lateinit var hbSchedSwitch: Switch
-    private lateinit var hbSchedBox: LinearLayout
-    private lateinit var hbStartBtn: Button
-    private lateinit var hbEndBtn: Button
-    private lateinit var hbStatus: TextView
-    private lateinit var hbExactBtn: Button
-    private val hbIntervalBtns = ArrayList<Pair<Int, Button>>()
-    private val hbDayBtns = ArrayList<Button>()
-    private var hbBinding = false
 
     private val binderListener = Shizuku.OnBinderReceivedListener { runOnUiThread { refresh() } }
     private val deadListener = Shizuku.OnBinderDeadListener { runOnUiThread { refresh() } }
@@ -108,7 +91,6 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refresh()
-        renderHb()
     }
 
     override fun onDestroy() {
@@ -222,11 +204,7 @@ class MainActivity : Activity() {
         val c2 = card()
         c2.addView(tv("GOOGLE", 11f, cSub, bold = true))
         c2.addView(pkgRow("Google Play Services", "com.google.android.gms", false))
-        c2.addView(pkgRow("Google Services Framework", "com.google.android.gsf", false))
         c2.addView(fcmRow())
-        c2.addView(textButton("Chụp trạng thái mạng").apply { setOnClickListener { snapNet() } })
-        c2.addView(textButton("Chụp hẹn giờ sau 10 phút").apply { setOnClickListener { scheduleSnap() } })
-        c2.addView(textButton("Xem kết quả chụp hẹn giờ").apply { setOnClickListener { showSnap() } })
 
         // Card ứng dụng bảo vệ
         val c3 = card()
@@ -271,7 +249,6 @@ class MainActivity : Activity() {
         content.addView(c1)
         content.addView(c2)
         content.addView(c3)
-        content.addView(buildHbCard())
         content.addView(button)
         content.addView(hint)
         content.addView(logToggle)
@@ -414,242 +391,6 @@ class MainActivity : Activity() {
         logCard.visibility = if (show) View.VISIBLE else View.GONE
         logToggle.text = if (show) "Ẩn log" else "Hiện log"
         if (show) renderLog()
-    }
-
-    // ---------- Giữ nhịp ----------
-
-    private fun styleToggle(b: Button, on: Boolean) {
-        b.setTextColor(if (on) Color.WHITE else cBlue)
-        b.background = rounded(if (on) cBlue else ((cBlue and 0xFFFFFF) or (0x22 shl 24)), 12)
-    }
-
-    private fun switchRow(label: String, sw: Switch): View = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        setPadding(0, dp(12), 0, 0)
-        addView(tv(label, 15f, cText), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        addView(sw)
-    }
-
-    private fun fmtMin(m: Int) = String.format(Locale.US, "%02d:%02d", m / 60, m % 60)
-
-    private fun buildHbCard(): LinearLayout {
-        val c = card()
-        c.addView(tv("GIỮ NHỊP · THỬ NGHIỆM", 11f, cSub, bold = true))
-        c.addView(tv(
-            "Định kỳ gửi nhịp tới Google Play Services để giữ kết nối thông báo khỏi bị nhà mạng cắt. Tác dụng chung cho mọi app dùng FCM, không chọn theo từng app.",
-            12f, cSub
-        ).apply { setPadding(0, dp(4), 0, 0) })
-
-        hbSwitch = Switch(this)
-        hbSwitch.setOnCheckedChangeListener { _, on ->
-            if (!hbBinding) {
-                Heartbeat.setEnabled(this, on)
-                Heartbeat.scheduleNext(this)
-                renderHb()
-            }
-        }
-        c.addView(switchRow("Bật giữ nhịp", hbSwitch))
-
-        // Chu kỳ
-        val iv = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(10), 0, 0)
-        }
-        iv.addView(tv("Chu kỳ", 15f, cText), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        listOf(3, 5, 10).forEach { m ->
-            val b = smallButton("$m phút") {
-                Heartbeat.setInterval(this, m)
-                Heartbeat.scheduleNext(this)
-                renderHb()
-            }
-            hbIntervalBtns.add(m to b)
-            iv.addView(b, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(dp(6), 0, 0, 0) })
-        }
-        c.addView(iv)
-
-        // Lịch
-        hbSchedSwitch = Switch(this)
-        hbSchedSwitch.setOnCheckedChangeListener { _, on ->
-            if (!hbBinding) {
-                Heartbeat.setSchedOn(this, on)
-                Heartbeat.scheduleNext(this)
-                renderHb()
-            }
-        }
-        c.addView(switchRow("Chỉ chạy theo lịch", hbSchedSwitch))
-
-        hbSchedBox = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
-        }
-        val times = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(10), 0, 0)
-        }
-        val gap = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { setMargins(dp(8), 0, 0, 0) }
-        hbStartBtn = smallButton("07:00") { pickTime(true) }
-        hbEndBtn = smallButton("22:00") { pickTime(false) }
-        times.addView(tv("Hoạt động từ", 14f, cText))
-        times.addView(hbStartBtn, gap)
-        times.addView(tv("đến", 14f, cText), gap)
-        times.addView(hbEndBtn, gap)
-        hbSchedBox.addView(times)
-
-        val days = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(10), 0, 0)
-        }
-        listOf("T2", "T3", "T4", "T5", "T6", "T7", "CN").forEachIndexed { i, name ->
-            val b = smallButton(name) {
-                Heartbeat.toggleDay(this, i)
-                Heartbeat.scheduleNext(this)
-                renderHb()
-            }
-            b.setPadding(0, dp(8), 0, dp(8))
-            hbDayBtns.add(b)
-            days.addView(b, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                .apply { setMargins(dp(2), 0, dp(2), 0) })
-        }
-        hbSchedBox.addView(days)
-        hbSchedBox.addView(tv("Ngoài khung giờ và các ngày không chọn, app không gửi nhịp và không đánh thức máy.", 11f, cSub)
-            .apply { setPadding(0, dp(6), 0, 0) })
-        c.addView(hbSchedBox)
-
-        hbStatus = tv("", 12f, cSub).apply { setPadding(0, dp(12), 0, 0) }
-        c.addView(hbStatus)
-        c.addView(textButton("Gửi thử 1 nhịp").apply { setOnClickListener { sendTestBeat() } })
-        c.addView(textButton("Kiểm tra GMS có xử lý nhịp").apply { setOnClickListener { measureBeat() } })
-        hbExactBtn = textButton("Cấp quyền báo thức chính xác").apply {
-            visibility = View.GONE
-            setOnClickListener { requestExactAlarm() }
-        }
-        c.addView(hbExactBtn)
-        return c
-    }
-
-    private fun pickTime(start: Boolean) {
-        val cur = if (start) Heartbeat.startMin(this) else Heartbeat.endMin(this)
-        TimePickerDialog(this, { _, h, m ->
-            if (start) Heartbeat.setStart(this, h * 60 + m) else Heartbeat.setEnd(this, h * 60 + m)
-            Heartbeat.scheduleNext(this)
-            renderHb()
-        }, cur / 60, cur % 60, true).show()
-    }
-
-    private fun sendTestBeat() {
-        if (!Doze.hasPermission()) {
-            hint.setTextColor(cRed)
-            hint.text = "Cần Shizuku đang chạy và đã cấp quyền để gửi nhịp."
-            return
-        }
-        hint.setTextColor(cSub)
-        hint.text = "Đang gửi thử 1 nhịp..."
-        Heartbeat.sendNow(this) {
-            runOnUiThread {
-                hint.text = "Đã gửi thử. Xem khối Giữ nhịp (gửi thử) trong log."
-                renderHb()
-            }
-        }
-    }
-
-    private fun measureBeat() {
-        if (!Doze.hasPermission()) {
-            hint.setTextColor(cRed)
-            hint.text = "Cần Shizuku đang chạy và đã cấp quyền để kiểm tra."
-            return
-        }
-        hint.setTextColor(cSub)
-        hint.text = "Đang kiểm tra..."
-        Heartbeat.measure(this) { msg ->
-            runOnUiThread {
-                hint.text = "Đã kiểm tra xong."
-                AlertDialog.Builder(this)
-                    .setTitle("GMS có xử lý nhịp không?")
-                    .setMessage(msg)
-                    .setPositiveButton("Đóng", null)
-                    .show()
-                renderHb()
-            }
-        }
-    }
-
-    private fun scheduleSnap() {
-        if (!Doze.hasPermission()) {
-            hint.setTextColor(cRed)
-            hint.text = "Cần Shizuku đang chạy và đã cấp quyền thì chụp hẹn giờ mới hoạt động."
-            return
-        }
-        Snapshot.schedule(this, 10)
-        hint.setTextColor(cSub)
-        hint.text = "Đã hẹn chụp sau 10 phút. Tắt màn hình ngay và để máy yên. Sau khi qua 10 phút, mở lại rồi bấm Xem kết quả chụp hẹn giờ."
-    }
-
-    private fun showSnap() {
-        val t = Snapshot.savedText(this)
-        if (t == null) {
-            val left = (Snapshot.dueMs(this) - System.currentTimeMillis()) / 60000
-            hint.setTextColor(cSub)
-            hint.text = if (left > 0) "Còn khoảng $left phút nữa mới chụp." else "Chưa có kết quả chụp hẹn giờ."
-            return
-        }
-        val st = AppLog.begin("Chụp hẹn giờ (đã lưu)")
-        st.add(t)
-        st.ok = true
-        hint.setTextColor(cSub)
-        hint.text = "Đã nạp kết quả vào log. Bấm Sao chép ở khối đó."
-        if (logCard.visibility != View.VISIBLE) toggleLog() else renderLog()
-    }
-
-    private fun snapNet() {
-        if (!Doze.hasPermission()) {
-            hint.setTextColor(cRed)
-            hint.text = "Cần Shizuku đang chạy và đã cấp quyền để chụp."
-            return
-        }
-        hint.setTextColor(cSub)
-        hint.text = "Đang chụp trạng thái mạng..."
-        Doze.netSnapshot(this, Prefs.allPackages(this)) {
-            runOnUiThread {
-                hint.text = "Đã chụp. Mở khối \"Trạng thái mạng\" trong log và bấm Sao chép."
-                if (logCard.visibility != View.VISIBLE) toggleLog() else renderLog()
-            }
-        }
-    }
-
-    private fun requestExactAlarm() {
-        if (Build.VERSION.SDK_INT >= 31) {
-            runCatching {
-                startActivity(
-                    Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName"))
-                )
-            }
-        }
-    }
-
-    private fun renderHb() {
-        hbBinding = true
-        hbSwitch.isChecked = Heartbeat.enabled(this)
-        hbSchedSwitch.isChecked = Heartbeat.schedOn(this)
-        hbBinding = false
-        hbSchedBox.visibility = if (Heartbeat.schedOn(this)) View.VISIBLE else View.GONE
-        hbIntervalBtns.forEach { (m, b) -> styleToggle(b, m == Heartbeat.intervalMin(this)) }
-        hbStartBtn.text = fmtMin(Heartbeat.startMin(this))
-        hbEndBtn.text = fmtMin(Heartbeat.endMin(this))
-        styleToggle(hbStartBtn, false)
-        styleToggle(hbEndBtn, false)
-        val d = Heartbeat.days(this)
-        hbDayBtns.forEachIndexed { i, b -> styleToggle(b, ((d shr i) and 1) == 1) }
-        hbStatus.text = Heartbeat.statusText(this)
-        val am = getSystemService(AlarmManager::class.java)
-        val needExact = Build.VERSION.SDK_INT >= 31 && Heartbeat.enabled(this) && !am.canScheduleExactAlarms()
-        hbExactBtn.visibility = if (needExact) View.VISIBLE else View.GONE
     }
 
     // ---------- Log theo giai đoạn ----------
@@ -884,7 +625,7 @@ class MainActivity : Activity() {
                 setButtonEnabled(false)
                 hint.setTextColor(cSub)
                 hint.text = "Đang áp dụng..."
-                Doze.apply(this, Prefs.allPackages(this)) { r ->
+                Doze.apply(Prefs.allPackages(this)) { r ->
                     runOnUiThread {
                         running = false
                         setButtonEnabled(true)
@@ -920,7 +661,7 @@ class MainActivity : Activity() {
                 setChip(shizukuChip, "Sẵn sàng", cGreen)
                 shizukuInfo.text = Doze.info()
                 button.text = "Áp dụng"
-                Doze.diag(this, Prefs.allPackages(this)) { r ->
+                Doze.diag(Prefs.allPackages(this)) { r ->
                     runOnUiThread { onDiag(r, announceTime) }
                 }
             }

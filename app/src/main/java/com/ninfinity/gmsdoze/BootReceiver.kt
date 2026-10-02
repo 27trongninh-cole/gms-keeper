@@ -6,14 +6,10 @@ import android.content.Intent
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        // Boot hoặc cập nhật app: dựng lại process, áp dụng lại whitelist (nếu Shizuku đã chạy)
-        // và đặt lại báo thức giữ nhịp (báo thức bị xoá sau reboot/cập nhật).
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
-            intent.action == Intent.ACTION_MY_PACKAGE_REPLACED
-        ) {
-            val app = context.applicationContext
-            Doze.applyIfPossible(app)
-            Heartbeat.scheduleNext(app)
+        // Boot: dựng process app. Nếu Shizuku đã chạy thì áp dụng ngay, nếu chưa thì
+        // listener trong App sẽ áp dụng khi Shizuku lên.
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
+            Doze.applyIfPossible(context.applicationContext)
         }
     }
 }

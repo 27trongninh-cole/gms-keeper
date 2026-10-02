@@ -2,7 +2,7 @@ package com.ninfinity.gmsdoze
 
 import android.content.Context
 
-/** Danh sách app người dùng muốn bảo vệ thêm ngoài GMS/GSF. Mặc định: Zalo. */
+/** Danh sách app người dùng muốn bảo vệ thêm ngoài GMS. Mặc định: Zalo. */
 object Prefs {
     private const val FILE = "gms_keeper"
     private const val KEY = "apps"
@@ -18,8 +18,7 @@ object Prefs {
             .putString(KEY, list.distinct().joinToString(",")).apply()
     }
 
-    // Gồm cả chính app này để báo thức giữ nhịp không bị Doze trì hoãn
-    fun allPackages(ctx: Context): List<String> = (Doze.GOOGLE + apps(ctx) + ctx.packageName).distinct()
+    fun allPackages(ctx: Context): List<String> = (Doze.GOOGLE + apps(ctx)).distinct()
 
     /** Theo dõi kết nối FCM của GMS giữa các lần kiểm tra: khi nào thấy lần đầu, đã đổi mấy lần. */
     data class FcmTrack(val sinceMs: Long, val lastChangeMs: Long, val changes: Int)
